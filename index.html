@@ -558,10 +558,11 @@
 <script>
   const API_BASE_URL = "https://rag-app-ioo2.onrender.com";
 // ── STATE ──
-let state={
-  pdfs:[],
-  activeIdx:-1,
-  loading:false
+let state = {
+  pdfs: [],
+  activeIdx: -1,
+  loading: false,
+  backend: API_BASE_URL
 };
 
  checkHealth();
