@@ -782,6 +782,7 @@ function getActiveSession(){
 function statusLabel(session){
   if(session.status === 'uploading') return 'Indexing PDF…';
   if(session.status === 'error') return '⚠ Upload failed — retry by re-attaching';
+  if(session.documentId === null) return session.messages.length + ' msgs · all documents';
   const parts = [];
   if(session.pdf.size) parts.push(session.pdf.size);
   if(session.pdf.pages) parts.push(session.pdf.pages + ' pages');
@@ -1038,16 +1039,37 @@ async function sendMessage(){
   const query = inp.value.trim();
   if(!query) return;
 
-  const session = getActiveSession();
+  let session = getActiveSession();
+
+  // No PDF selected — that's allowed. Use (or create) a "no document"
+  // session that queries the entire backend knowledge base instead of
+  // forcing the user to upload something first.
   if(!session){
-    showToast('Upload a PDF first to start a chat.', 'error');
-    return;
+    session = state.sessions.find(s => s.documentId === null && s.status === 'ready');
+    if(!session){
+      session = {
+        id: uid(),
+        name: 'General knowledge base',
+        documentId: null,
+        pdf: { name: '', size: '' },
+        messages: [],
+        status: 'ready',
+        createdAt: Date.now()
+      };
+      state.sessions.unshift(session);
+    }
+    state.activeSessionId = session.id;
+    renderSessionList();
+    updateTopbar(session);
+    renderChatFromSession(session);
+    persistState();
   }
+
   if(session.status === 'uploading'){
     showToast('This document is still being indexed. Please wait a moment.', 'error');
     return;
   }
-  if(session.status === 'error' || !session.documentId){
+  if(session.status === 'error'){
     showToast('This document failed to upload. Remove it and try attaching it again.', 'error');
     return;
   }
