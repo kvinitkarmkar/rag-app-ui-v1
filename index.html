@@ -474,6 +474,46 @@
     .topbar-actions{gap:6px;}
     .topbar-btn{padding:7px 9px;}
   }
+
+  /* ── NEW: citations ── */
+  .sources-footer{
+    margin-top:10px;padding-top:10px;border-top:1px solid var(--border);
+    display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  }
+  .sources-label{font-size:11px;color:var(--text3);font-weight:500;}
+  .source-chip{
+    font-size:11px;font-weight:500;padding:3px 9px;border-radius:50px;
+    background:rgba(79,142,247,0.1);border:1px solid rgba(79,142,247,0.25);color:var(--accent);
+  }
+
+  /* ── NEW: streaming cursor ── */
+  .stream-cursor{
+    display:inline-block;width:2px;height:13px;background:var(--accent);
+    margin-left:2px;vertical-align:middle;animation:blink 1s step-start infinite;
+  }
+  @keyframes blink{50%{opacity:0;}}
+
+  /* ── NEW: session status text ── */
+  .pdf-item.uploading .pdf-meta{color:var(--accent);}
+  .pdf-item.error .pdf-meta{color:var(--red);}
+
+  /* ── NEW: toast notifications ── */
+  .toast-container{
+    position:fixed;bottom:20px;right:20px;z-index:200;
+    display:flex;flex-direction:column;gap:10px;max-width:340px;
+  }
+  .toast{
+    background:#11111c;border:1px solid var(--border2);border-radius:var(--radius);
+    padding:12px 14px;font-size:12.5px;color:var(--text);line-height:1.5;
+    box-shadow:0 12px 40px rgba(0,0,0,0.5);
+    display:flex;align-items:flex-start;gap:9px;
+    animation:fadeUp .2s ease;transition:opacity .3s ease;
+  }
+  .toast.error{border-color:rgba(255,77,106,0.35);}
+  .toast.success{border-color:rgba(0,212,170,0.3);}
+  @media(max-width:680px){
+    .toast-container{left:16px;right:16px;max-width:none;}
+  }
 </style>
 </head>
 <body>
@@ -491,17 +531,23 @@
 
     <div class="sidebar-section">Upload PDF</div>
     <div class="upload-zone" id="uploadZone">
-      <input type="file" accept=".pdf" multiple id="fileInput" onchange="handleFiles(this.files)"/>
+      <input type="file" accept=".pdf" multiple id="fileInput" onchange="handleFiles(this.files); this.value='';"/>
       <div class="upload-icon">📄</div>
       <div class="upload-title">Drop PDF here</div>
-      <div class="upload-hint">or click to browse</div>
+      <div class="upload-hint">or click to browse — starts a new chat</div>
     </div>
 
-    <div class="sidebar-section">Documents</div>
-    <div class="pdf-list" id="pdfList">
+    <div class="sidebar-section">Sessions</div>
+    <div class="pdf-list" id="sessionList">
       <div style="padding:20px 8px;text-align:center;color:var(--text3);font-size:12px;">No documents yet</div>
     </div>
-    
+
+    <div class="sidebar-bottom">
+      <button class="settings-btn" onclick="openSettings()">
+        ⚙️ Settings
+        <span class="status-dot" id="statusDot"></span>
+      </button>
+    </div>
   </aside>
 
   <!-- MAIN -->
@@ -538,8 +584,7 @@
         <div class="input-top">
           <textarea id="userInput" placeholder="Ask anything about your PDF..." rows="1"
             oninput="autoResize(this);updateChar()"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}">
-          </textarea>
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"></textarea>
           <button class="send-btn" id="sendBtn" onclick="sendMessage()">
             <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
@@ -555,19 +600,124 @@
   </main>
 </div>
 
+<!-- SETTINGS MODAL -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Settings</span>
+      <button class="modal-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Backend URL</label>
+      <input class="form-input" id="backendUrlInput" placeholder="https://your-backend.com"/>
+      <div class="form-hint">Kyanite.ai sends PDFs (once, on upload) and questions (document_id only) to this server.</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Markdown rendering + sanitization -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.5/purify.min.js"></script>
+
 <script>
-  const API_BASE_URL = "https://rag-app-ioo2.onrender.com";
-// ── STATE ──
+/* ============================================================
+   CONFIG + STATE
+   ============================================================ */
+const DEFAULT_BACKEND = "https://rag-app-ioo2.onrender.com";
+const LS_SESSIONS_KEY = "kyanite_sessions_v2";
+const LS_BACKEND_KEY  = "kyanite_backend_url";
+
+const WELCOME_HTML = `
+  <div class="welcome" id="welcomeScreen">
+    <div class="welcome-glow">💎</div>
+    <h2>Kyanite.ai</h2>
+    <p>Upload a PDF and ask anything — get structured, intelligent answers instantly.</p>
+    <div class="chips">
+      <div class="chip" onclick="setChip(this)">📝 Summarize document</div>
+      <div class="chip" onclick="setChip(this)">🔑 Key points</div>
+      <div class="chip" onclick="setChip(this)">❓ Ask a question</div>
+      <div class="chip" onclick="setChip(this)">📊 Extract data</div>
+    </div>
+  </div>`;
+
 let state = {
-  pdfs: [],
-  activeIdx: -1,
+  sessions: [],          // {id, name, documentId, pdf:{name,size,pages,chunks}, messages:[{role,content,sources}], status, createdAt}
+  activeSessionId: null,
   loading: false,
-  backend: API_BASE_URL
+  backend: DEFAULT_BACKEND
 };
 
- checkHealth();
-  
-// ── SIDEBAR ──
+/* ============================================================
+   MARKDOWN — marked.js + DOMPurify (replaces the old regex parser)
+   ============================================================ */
+const mdRenderer = new marked.Renderer();
+mdRenderer.code = function(code, infostring){
+  const lang = ((infostring || '').split(/\s+/)[0] || 'text');
+  return '<div class="code-wrap"><div class="code-header"><span class="code-lang">'
+    + escHtml(lang) + '</span><button class="code-copy" type="button" data-action="copy-code">📋 Copy</button></div>'
+    + '<pre><code>' + escHtml(code) + '</code></pre></div>';
+};
+marked.setOptions({ renderer: mdRenderer, gfm: true, breaks: false });
+
+function renderMarkdown(raw){
+  const html = marked.parse(raw || '');
+  return DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
+}
+
+function escHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Event delegation for "copy code" buttons — works for every code block,
+// present now or streamed in later, without relying on inline handlers.
+document.addEventListener('click', function(e){
+  const btn = e.target.closest('[data-action="copy-code"]');
+  if(!btn) return;
+  const pre = btn.closest('.code-wrap').querySelector('pre');
+  navigator.clipboard.writeText(pre.textContent).then(()=>{
+    const original = btn.innerHTML;
+    btn.innerHTML = '✅ Copied';
+    setTimeout(()=>{ btn.innerHTML = original; }, 1800);
+  }).catch(()=> showToast('Could not copy to clipboard.', 'error'));
+});
+
+/* ============================================================
+   PERSISTENCE
+   ============================================================ */
+function persistState(){
+  try{
+    localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify({
+      sessions: state.sessions,
+      activeSessionId: state.activeSessionId
+    }));
+  }catch(e){ console.warn('Could not save chat history locally', e); }
+}
+
+function loadPersistedState(){
+  state.backend = localStorage.getItem(LS_BACKEND_KEY) || DEFAULT_BACKEND;
+  try{
+    const raw = localStorage.getItem(LS_SESSIONS_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      state.sessions = Array.isArray(parsed.sessions) ? parsed.sessions : [];
+      state.activeSessionId = parsed.activeSessionId || null;
+      // A PDF that was mid-upload when the tab closed can't resume — flag it.
+      state.sessions.forEach(s=>{ if(s.status === 'uploading') s.status = 'error'; });
+    }
+  }catch(e){ console.warn('Could not restore previous chat history', e); }
+}
+
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function formatSize(b){ return b > 1e6 ? (b/1e6).toFixed(1)+' MB' : (b/1e3).toFixed(0)+' KB'; }
+function now(){ return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }
+
+/* ============================================================
+   SIDEBAR / SESSIONS
+   ============================================================ */
 function toggleSidebar(){
   document.getElementById('sidebar').classList.toggle('open');
   document.getElementById('sidebarOverlay').classList.toggle('open');
@@ -577,216 +727,449 @@ function closeSidebar(){
   document.getElementById('sidebarOverlay').classList.remove('open');
 }
 
-// ── FILES ──
-function handleFiles(files){
-  Array.from(files).forEach(f=>{
-    if(f.type!=='application/pdf')return;
-    const id=Date.now()+'_'+Math.random().toString(36).slice(2);
-    state.pdfs.push({id,file:f,name:f.name,size:formatSize(f.size)});
-  });
-  renderPdfList();
-  if(state.activeIdx===-1&&state.pdfs.length>0)setActive(0);
-  closeSidebar();
+function getActiveSession(){
+  return state.sessions.find(s => s.id === state.activeSessionId) || null;
 }
-function formatSize(b){return b>1e6?(b/1e6).toFixed(1)+' MB':(b/1e3).toFixed(0)+' KB';}
 
-function renderPdfList(){
-  const el=document.getElementById('pdfList');
-  if(!state.pdfs.length){el.innerHTML='<div style="padding:20px 8px;text-align:center;color:var(--text3);font-size:12px;">No documents yet</div>';return;}
-  el.innerHTML=state.pdfs.map((p,i)=>`
-    <div class="pdf-item${i===state.activeIdx?' active':''}" onclick="setActive(${i})">
+function statusLabel(session){
+  if(session.status === 'uploading') return 'Indexing PDF…';
+  if(session.status === 'error') return '⚠ Upload failed — retry by re-attaching';
+  const parts = [];
+  if(session.pdf.size) parts.push(session.pdf.size);
+  if(session.pdf.pages) parts.push(session.pdf.pages + ' pages');
+  parts.push(session.messages.length + ' msgs');
+  return parts.join(' · ');
+}
+
+function renderSessionList(){
+  const el = document.getElementById('sessionList');
+  if(!state.sessions.length){
+    el.innerHTML = '<div style="padding:20px 8px;text-align:center;color:var(--text3);font-size:12px;">No documents yet</div>';
+    return;
+  }
+  el.innerHTML = state.sessions.map(s => `
+    <div class="pdf-item ${s.id===state.activeSessionId?'active':''} ${s.status||''}" onclick="setActiveSession('${s.id}')">
       <div class="pdf-icon">PDF</div>
       <div class="pdf-info">
-        <div class="pdf-name">${p.name}</div>
-        <div class="pdf-meta">${p.size}</div>
+        <div class="pdf-name">${escHtml(s.name)}</div>
+        <div class="pdf-meta">${escHtml(statusLabel(s))}</div>
       </div>
-      <span class="pdf-del" onclick="event.stopPropagation();removePdf(${i})">✕</span>
+      <span class="pdf-del" onclick="event.stopPropagation();removeSession('${s.id}')">✕</span>
     </div>`).join('');
 }
-function setActive(i){
-  state.activeIdx=i;
-  renderPdfList();
-  const p=state.pdfs[i];
-  document.getElementById('topbarDocName').textContent=p.name;
-  document.getElementById('topbarDocSub').textContent=p.size+' · Ready to query';
-}
-function removePdf(i){
-  state.pdfs.splice(i,1);
-  if(state.activeIdx===i)state.activeIdx=state.pdfs.length?0:-1;
-  else if(state.activeIdx>i)state.activeIdx--;
-  renderPdfList();
-  if(state.activeIdx>=0)setActive(state.activeIdx);
-  else{document.getElementById('topbarDocName').textContent='No document selected';document.getElementById('topbarDocSub').textContent='Upload a PDF to begin';}
+
+function updateTopbar(session){
+  if(!session){
+    document.getElementById('topbarDocName').textContent = 'No document selected';
+    document.getElementById('topbarDocSub').textContent = 'Upload a PDF to begin';
+    return;
+  }
+  document.getElementById('topbarDocName').textContent = session.name;
+  document.getElementById('topbarDocSub').textContent = statusLabel(session);
 }
 
-// ── DRAG DROP ──
-const zone=document.getElementById('uploadZone');
-zone.addEventListener('dragover',e=>{e.preventDefault();zone.style.borderColor='rgba(79,142,247,0.6)';});
-zone.addEventListener('dragleave',()=>zone.style.borderColor='');
-zone.addEventListener('drop',e=>{e.preventDefault();zone.style.borderColor='';handleFiles(e.dataTransfer.files);});
+function setActiveSession(id){
+  state.activeSessionId = id;
+  persistState();
+  renderSessionList();
+  const session = getActiveSession();
+  updateTopbar(session);
+  renderChatFromSession(session);
+}
 
-// ── CHAT ──
+function renderChatFromSession(session){
+  const ca = document.getElementById('chatArea');
+  ca.innerHTML = '';
+  if(!session || !session.messages.length){
+    ca.innerHTML = WELCOME_HTML;
+    return;
+  }
+  session.messages.forEach(m=>{
+    if(m.role === 'user'){
+      appendMsg('user', escHtml(m.content));
+    }else{
+      appendMsg('ai', renderMarkdown(m.content) + renderSources(m.sources));
+    }
+  });
+}
+
+async function removeSession(id){
+  const session = state.sessions.find(s=>s.id===id);
+  if(!session) return;
+  if(!confirm(`Delete "${session.name}" and its chat history? This cannot be undone.`)) return;
+
+  // Best-effort cleanup on the server; UI removal proceeds regardless.
+  if(session.documentId){
+    fetch(state.backend.replace(/\/$/,'') + '/document/' + session.documentId, { method:'DELETE' }).catch(()=>{});
+  }
+
+  const idx = state.sessions.findIndex(s=>s.id===id);
+  state.sessions.splice(idx, 1);
+  if(state.activeSessionId === id){
+    state.activeSessionId = state.sessions.length ? state.sessions[0].id : null;
+  }
+  persistState();
+  renderSessionList();
+  const next = getActiveSession();
+  updateTopbar(next);
+  renderChatFromSession(next);
+}
+
+/* ============================================================
+   UPLOAD  (one-time PDF ingestion -> document_id)
+   ============================================================ */
+const zone = document.getElementById('uploadZone');
+zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.style.borderColor = 'rgba(79,142,247,0.6)'; });
+zone.addEventListener('dragleave', ()=> zone.style.borderColor = '');
+zone.addEventListener('drop', e=>{
+  e.preventDefault(); zone.style.borderColor = '';
+  handleFiles(e.dataTransfer.files);
+});
+
+function handleFiles(files){
+  const pdfFiles = Array.from(files).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  if(!pdfFiles.length){
+    showToast('Please choose a PDF file.', 'error');
+    return;
+  }
+  closeSidebar();
+  uploadFilesSequentially(pdfFiles);
+}
+
+async function uploadFilesSequentially(files){
+  for(const file of files){
+    await createSessionFromFile(file);
+  }
+}
+
+function createSessionFromFile(file){
+  const session = {
+    id: uid(),
+    name: file.name,
+    documentId: null,
+    pdf: { name: file.name, size: formatSize(file.size) },
+    messages: [],
+    status: 'uploading',
+    createdAt: Date.now()
+  };
+  state.sessions.unshift(session);
+  state.activeSessionId = session.id;
+  renderSessionList();
+  updateTopbar(session);
+  renderChatFromSession(session);
+  persistState();
+
+  return doUpload(session, file);
+}
+
+async function doUpload(session, file){
+  setProgress(15);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(()=>controller.abort(), 120000); // 2 min for large PDFs
+
+  try{
+    const fd = new FormData();
+    fd.append('file', file);
+
+    setProgress(40);
+    const res = await fetch(state.backend.replace(/\/$/,'') + '/upload', {
+      method: 'POST', body: fd, signal: controller.signal
+    });
+    setProgress(80);
+
+    if(!res.ok){
+      const detail = await safeErrorDetail(res, 'Upload failed (' + res.status + ').');
+      throw new Error(detail);
+    }
+
+    const data = await res.json();
+    session.documentId = data.document_id;
+    session.status = 'ready';
+    session.pdf.pages = data.pages;
+    session.pdf.chunks = data.chunks;
+    setProgress(100);
+    showToast(`"${file.name}" is ready — ${data.pages} pages indexed.`, 'success');
+  }catch(err){
+    session.status = 'error';
+    const message = err.name === 'AbortError'
+      ? 'Upload timed out. Try a smaller file or check your connection.'
+      : (err.message || 'Could not reach the backend. Check your connection or backend URL in Settings.');
+    showToast(`"${file.name}": ${message}`, 'error');
+  }finally{
+    clearTimeout(timeoutId);
+    renderSessionList();
+    if(state.activeSessionId === session.id) updateTopbar(session);
+    persistState();
+    setTimeout(()=>setProgress(0), 400);
+  }
+}
+
+async function safeErrorDetail(res, fallback){
+  try{
+    const data = await res.json();
+    return data.detail || fallback;
+  }catch(_e){
+    return fallback;
+  }
+}
+
+/* ============================================================
+   CHAT
+   ============================================================ */
 function clearChat(){
-  const ca=document.getElementById('chatArea');
-  ca.innerHTML='<div class="welcome" id="welcomeScreen"><div class="welcome-glow">💎</div><h2>Kyanite.ai</h2><p>Upload a PDF and ask anything — get structured, intelligent answers instantly.</p><div class="chips"><div class="chip" onclick="setChip(this)">📝 Summarize document</div><div class="chip" onclick="setChip(this)">🔑 Key points</div><div class="chip" onclick="setChip(this)">❓ Ask a question</div><div class="chip" onclick="setChip(this)">📊 Extract data</div></div></div>';
+  const session = getActiveSession();
+  if(!session){
+    document.getElementById('chatArea').innerHTML = WELCOME_HTML;
+    return;
+  }
+  if(!confirm(`Clear the conversation for "${session.name}"? This cannot be undone.`)) return;
+  session.messages = [];
+  persistState();
+  renderSessionList();
+  renderChatFromSession(session);
 }
 
 function setChip(el){
-  document.getElementById('userInput').value=el.textContent.replace(/^[^\s]+\s/,'').trim();
+  document.getElementById('userInput').value = el.textContent.replace(/^[^\s]+\s/, '').trim();
   updateChar();
   document.getElementById('userInput').focus();
 }
 
 function autoResize(ta){
-  ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,160)+'px';
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
 }
 function updateChar(){
-  const v=document.getElementById('userInput').value;
-  document.getElementById('charCount').textContent=v.length+' / 2000';
+  const v = document.getElementById('userInput').value;
+  document.getElementById('charCount').textContent = v.length + ' / 2000';
 }
 
-function now(){
-  return new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-}
-
-function appendMsg(role,html,time){
-  const wl=document.getElementById('welcomeScreen');
-  if(wl)wl.remove();
-  const ca=document.getElementById('chatArea');
-  const div=document.createElement('div');
-  div.className='msg '+(role==='user'?'user':'ai');
-  div.innerHTML=`
-    <div class="msg-avatar">${role==='user'?'YOU':'K'}</div>
+function appendMsg(role, html, time){
+  const wl = document.getElementById('welcomeScreen');
+  if(wl) wl.remove();
+  const ca = document.getElementById('chatArea');
+  const div = document.createElement('div');
+  div.className = 'msg ' + (role === 'user' ? 'user' : 'ai');
+  div.innerHTML = `
+    <div class="msg-avatar">${role === 'user' ? 'YOU' : 'K'}</div>
     <div class="msg-content">
       <div class="msg-bubble">${html}</div>
-      <div class="msg-time">${time||now()}</div>
+      <div class="msg-time">${time || now()}</div>
     </div>`;
   ca.appendChild(div);
-  ca.scrollTop=ca.scrollHeight;
+  ca.scrollTop = ca.scrollHeight;
   return div;
 }
 
-function showThinking(){
-  const wl=document.getElementById('welcomeScreen');
-  if(wl)wl.remove();
-  const ca=document.getElementById('chatArea');
-  const div=document.createElement('div');
-  div.className='msg ai';div.id='thinking';
-  div.innerHTML=`<div class="msg-avatar">K</div><div class="msg-content"><div class="msg-bubble"><div class="thinking"><span></span><span></span><span></span></div></div></div>`;
-  ca.appendChild(div);ca.scrollTop=ca.scrollHeight;
-}
-function hideThinking(){const el=document.getElementById('thinking');if(el)el.remove();}
-
-function setProgress(pct){
-  const bar=document.getElementById('progressBar');
-  const fill=document.getElementById('progressFill');
-  if(pct>0){bar.classList.add('active');fill.style.width=pct+'%';}
-  else{fill.style.width='0%';setTimeout(()=>bar.classList.remove('active'),300);}
+function scrollChat(){
+  const ca = document.getElementById('chatArea');
+  ca.scrollTop = ca.scrollHeight;
 }
 
-// ── MARKDOWN ──
-function md(text){
-  // headings
-  text=text.replace(/^### (.+)$/gm,'<h3>$1</h3>');
-  text=text.replace(/^## (.+)$/gm,'<h2>$1</h2>');
-  text=text.replace(/^# (.+)$/gm,'<h1>$1</h1>');
-  // code blocks
-  text=text.replace(/```(\w*)\n([\s\S]*?)```/g,(_,lang,code)=>{
-    const id='cb_'+Math.random().toString(36).slice(2);
-    return `<div class="code-wrap"><div class="code-header"><span class="code-lang">${lang||'code'}</span><button class="code-copy" id="${id}" onclick="copyCode('${id}')">📋 Copy</button></div><pre>${escHtml(code.trim())}</pre></div>`;
-  });
-  // inline code
-  text=text.replace(/`([^`]+)`/g,'<code>$1</code>');
-  // bold/italic
-  text=text.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
-  text=text.replace(/\*(.+?)\*/g,'<em>$1</em>');
-  // hr
-  text=text.replace(/^---$/gm,'<hr>');
-  // blockquote
-  text=text.replace(/^> (.+)$/gm,'<blockquote>$1</blockquote>');
-  // tables
-  text=text.replace(/((\|.+\|\n)+)/g, tbl=>{
-    const rows=tbl.trim().split('\n');
-    if(rows.length<2)return tbl;
-    const headers=rows[0].split('|').filter(c=>c.trim()).map(c=>`<th>${c.trim()}</th>`).join('');
-    const body=rows.slice(2).map(r=>'<tr>'+r.split('|').filter(c=>c.trim()).map(c=>`<td>${c.trim()}</td>`).join('')+'</tr>').join('');
-    return `<table><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table>`;
-  });
-  // lists
-  text=text.replace(/^\* (.+)$/gm,'<li>$1</li>');
-  text=text.replace(/((<li>.*<\/li>\n?)+)/g,'<ul>$1</ul>');
-  text=text.replace(/^\d+\. (.+)$/gm,'<li>$1</li>');
-  // paragraphs
-  text=text.split('\n\n').map(p=>{
-    if(/^<(h[1-3]|ul|ol|table|blockquote|div|pre|hr)/.test(p.trim()))return p;
-    return '<p>'+p.replace(/\n/g,' ')+'</p>';
-  }).join('\n');
-  return text;
+function renderSources(sources){
+  if(!sources || !sources.length) return '';
+  const chips = sources.map(s => `<span class="source-chip">Page ${escHtml(String(s.page))}</span>`).join('');
+  return `<div class="sources-footer"><span class="sources-label">Sources:</span>${chips}</div>`;
 }
 
-function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-
-function copyCode(id){
-  const btn=document.getElementById(id);
-  const pre=btn.closest('.code-wrap').querySelector('pre');
-  navigator.clipboard.writeText(pre.textContent).then(()=>{
-    btn.textContent='✅ Copied';
-    setTimeout(()=>btn.innerHTML='📋 Copy',2000);
-  });
-}
-
-// ── SEND ──
 async function sendMessage(){
-  if(state.loading)return;
-  const inp=document.getElementById('userInput');
-  const query=inp.value.trim();
-  if(!query)return;
-  if(state.activeIdx<0){appendMsg('ai','⚠️ Please upload a PDF first.',now());return;}
+  if(state.loading) return;
+  const inp = document.getElementById('userInput');
+  const query = inp.value.trim();
+  if(!query) return;
 
-  inp.value='';autoResize(inp);updateChar();
-  document.getElementById('sendBtn').disabled=true;
-  state.loading=true;
+  const session = getActiveSession();
+  if(!session){
+    showToast('Upload a PDF first to start a chat.', 'error');
+    return;
+  }
+  if(session.status === 'uploading'){
+    showToast('This document is still being indexed. Please wait a moment.', 'error');
+    return;
+  }
+  if(session.status === 'error' || !session.documentId){
+    showToast('This document failed to upload. Remove it and try attaching it again.', 'error');
+    return;
+  }
 
-  appendMsg('user',escHtml(query));
-  showThinking();
+  inp.value = ''; autoResize(inp); updateChar();
+  document.getElementById('sendBtn').disabled = true;
+  state.loading = true;
+
+  session.messages.push({ role: 'user', content: query });
+  appendMsg('user', escHtml(query));
+  persistState();
+
+  const aiDiv = appendMsg('ai', '<span class="stream-cursor"></span>');
+  const bubble = aiDiv.querySelector('.msg-bubble');
+
+  let buffer = '';
+  let sources = [];
+  let gotAnyToken = false;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(()=>controller.abort(), 60000);
   setProgress(20);
 
-  const fd=new FormData();
-  fd.append('file',state.pdfs[state.activeIdx].file);
-  fd.append('query',query);
-
   try{
+    const res = await fetch(state.backend.replace(/\/$/,'') + '/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ document_id: session.documentId, query }),
+      signal: controller.signal
+    });
+
+    if(!res.ok){
+      const detail = await safeErrorDetail(res, 'Request failed (' + res.status + ').');
+      throw new Error(detail);
+    }
+    if(!res.body) throw new Error('Streaming is not supported on this connection.');
+
     setProgress(50);
-    const res=await fetch(state.backend.replace(/\/$/,'')+'/query',{method:'POST',body:fd});
-    setProgress(85);
-    if(!res.ok)throw new Error('HTTP '+res.status);
-    const data=await res.json();
-    const answer=data.answer||data.result||data.response||JSON.stringify(data);
-    hideThinking();
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let partial = '';
+
+    while(true){
+      const { value, done } = await reader.read();
+      if(done) break;
+      partial += decoder.decode(value, { stream: true });
+      const events = partial.split('\n\n');
+      partial = events.pop(); // keep any incomplete trailing event for the next read
+
+      for(const evt of events){
+        const line = evt.trim();
+        if(!line.startsWith('data:')) continue;
+        const jsonStr = line.slice(5).trim();
+        if(!jsonStr) continue;
+
+        let payload;
+        try{ payload = JSON.parse(jsonStr); }catch(_e){ continue; }
+
+        if(payload.type === 'token'){
+          gotAnyToken = true;
+          buffer += payload.content;
+          bubble.innerHTML = renderMarkdown(buffer) + '<span class="stream-cursor"></span>';
+          scrollChat();
+        }else if(payload.type === 'sources'){
+          sources = payload.sources || [];
+        }else if(payload.type === 'error'){
+          throw new Error(payload.message || 'Something went wrong while generating the answer.');
+        }
+        // "done" needs no action — loop ends naturally when the stream closes
+      }
+    }
+
     setProgress(100);
-    appendMsg('ai',md(answer));
-  }catch(e){
-    hideThinking();
-    appendMsg('ai','⚠️ <strong>Connection error:</strong> '+e.message+'<br><small style="color:var(--text3)">Check your backend URL in Settings.</small>');
+    bubble.innerHTML = renderMarkdown(buffer || '_No answer was generated for this question._') + renderSources(sources);
+    session.messages.push({ role: 'assistant', content: buffer, sources });
+    persistState();
+    renderSessionList();
+  }catch(err){
+    const message = err.name === 'AbortError'
+      ? 'The request took too long and timed out. Please try again.'
+      : (err.message || 'Connection error. Check your network or backend URL in Settings.');
+
+    if(gotAnyToken && buffer){
+      bubble.innerHTML = renderMarkdown(buffer) + renderSources(sources)
+        + `<div class="sources-footer"><span class="sources-label">⚠️ Interrupted:</span> ${escHtml(message)}</div>`;
+      session.messages.push({ role: 'assistant', content: buffer, sources });
+    }else{
+      bubble.innerHTML = `⚠️ <strong>${escHtml(message)}</strong>`;
+      session.messages.push({ role: 'assistant', content: '⚠️ ' + message, sources: [] });
+    }
+    persistState();
   }finally{
-    setProgress(0);
-    state.loading=false;
-    document.getElementById('sendBtn').disabled=false;
-    setTimeout(()=>setProgress(0),500);
+    clearTimeout(timeoutId);
+    state.loading = false;
+    document.getElementById('sendBtn').disabled = false;
+    setTimeout(()=>setProgress(0), 300);
+    setTimeout(scrollChat, 50);
   }
 }
 
-// ── SETTINGS ──
-async function checkHealth(){
-  try{
-    await fetch(
-      state.backend+'/health',
-      {signal:AbortSignal.timeout(4000)}
-    );
-  }catch(e){
-    console.error("Backend offline");
+/* ============================================================
+   PROGRESS BAR
+   ============================================================ */
+function setProgress(pct){
+  const bar = document.getElementById('progressBar');
+  const fill = document.getElementById('progressFill');
+  if(pct > 0){
+    bar.classList.add('active');
+    fill.style.width = pct + '%';
+  }else{
+    fill.style.width = '0%';
+    setTimeout(()=> bar.classList.remove('active'), 300);
   }
 }
+
+/* ============================================================
+   TOASTS
+   ============================================================ */
+function showToast(message, type){
+  type = type || 'info';
+  let container = document.getElementById('toastContainer');
+  if(!container){
+    container = document.createElement('div');
+    container.id = 'toastContainer';
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const icon = type === 'error' ? '⚠️' : type === 'success' ? '✅' : 'ℹ️';
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.innerHTML = `<span>${icon}</span><span>${escHtml(message)}</span>`;
+  container.appendChild(el);
+  setTimeout(()=>{
+    el.style.opacity = '0';
+    setTimeout(()=> el.remove(), 300);
+  }, 4500);
+}
+
+/* ============================================================
+   SETTINGS (backend URL) + HEALTH CHECK
+   ============================================================ */
+function openSettings(){
+  document.getElementById('backendUrlInput').value = state.backend;
+  document.getElementById('settingsModal').classList.add('open');
+}
+function closeSettings(){
+  document.getElementById('settingsModal').classList.remove('open');
+}
+function saveSettings(){
+  const val = document.getElementById('backendUrlInput').value.trim();
+  if(!val || !/^https?:\/\//i.test(val)){
+    showToast('Please enter a valid URL starting with http:// or https://', 'error');
+    return;
+  }
+  state.backend = val.replace(/\/$/, '');
+  localStorage.setItem(LS_BACKEND_KEY, state.backend);
+  closeSettings();
+  showToast('Settings saved.', 'success');
+  checkHealth();
+}
+
+async function checkHealth(){
+  const dot = document.getElementById('statusDot');
+  try{
+    const res = await fetch(state.backend.replace(/\/$/,'') + '/health', { signal: AbortSignal.timeout(4000) });
+    dot.classList.toggle('ok', res.ok);
+    dot.classList.toggle('err', !res.ok);
+  }catch(e){
+    dot.classList.remove('ok');
+    dot.classList.add('err');
+  }
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+loadPersistedState();
+renderSessionList();
+const initialSession = getActiveSession();
+updateTopbar(initialSession);
+renderChatFromSession(initialSession);
+checkHealth();
+setInterval(checkHealth, 30000);
 </script>
 </body>
 </html>
