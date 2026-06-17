@@ -501,13 +501,7 @@
     <div class="pdf-list" id="pdfList">
       <div style="padding:20px 8px;text-align:center;color:var(--text3);font-size:12px;">No documents yet</div>
     </div>
-
-    <div class="sidebar-bottom">
-      <button class="settings-btn" onclick="openSettings()">
-        ⚙️ <span>Settings</span>
-        <div class="status-dot" id="statusDot"></div>
-      </button>
-    </div>
+    
   </aside>
 
   <!-- MAIN -->
@@ -522,7 +516,6 @@
       </div>
       <div class="topbar-actions">
         <button class="topbar-btn" onclick="clearChat()">🗑 <span>Clear</span></button>
-        <button class="topbar-btn primary" onclick="openSettings()">🔗 <span>Connect</span></button>
       </div>
     </div>
 
@@ -562,37 +555,17 @@
   </main>
 </div>
 
-<!-- SETTINGS MODAL -->
-<div class="modal-overlay" id="settingsModal">
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title">⚙️ Connection Settings</div>
-      <button class="modal-close" onclick="closeSettings()">✕</button>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Backend URL</label>
-      <input class="form-input" type="text" id="backendUrl" placeholder="https://your-app.onrender.com"/>
-      <div class="form-hint">Your FastAPI backend URL (Render / Railway / localhost)</div>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Connection Status</label>
-      <input class="form-input" type="text" id="statusText" readonly value="Not tested" style="color:var(--text3);"/>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="testConnection()">🔍 Test</button>
-      <button class="btn btn-primary" onclick="saveSettings()">💾 Save</button>
-    </div>
-  </div>
-</div>
-
 <script>
+  const API_BASE_URL = "https://rag-app-ioo2.onrender.com";
 // ── STATE ──
-let state={backend:'',pdfs:[],activeIdx:-1,loading:false};
+let state={
+  pdfs:[],
+  activeIdx:-1,
+  loading:false
+};
 
-// Load saved
-const saved=localStorage.getItem('kyanite_backend');
-if(saved){state.backend=saved;document.getElementById('backendUrl').value=saved;checkHealth();}
-
+ checkHealth();
+  
 // ── SIDEBAR ──
 function toggleSidebar(){
   document.getElementById('sidebar').classList.toggle('open');
@@ -767,7 +740,6 @@ async function sendMessage(){
   const inp=document.getElementById('userInput');
   const query=inp.value.trim();
   if(!query)return;
-  if(!state.backend){openSettings();return;}
   if(state.activeIdx<0){appendMsg('ai','⚠️ Please upload a PDF first.',now());return;}
 
   inp.value='';autoResize(inp);updateChar();
@@ -804,36 +776,16 @@ async function sendMessage(){
 }
 
 // ── SETTINGS ──
-function openSettings(){document.getElementById('settingsModal').classList.add('open');}
-function closeSettings(){document.getElementById('settingsModal').classList.remove('open');}
-function saveSettings(){
-  const url=document.getElementById('backendUrl').value.trim();
-  state.backend=url;
-  localStorage.setItem('kyanite_backend',url);
-  closeSettings();
-  if(url)checkHealth();
-}
-async function testConnection(){
-  const url=document.getElementById('backendUrl').value.trim();
-  if(!url){document.getElementById('statusText').value='⚠️ Enter a URL first';return;}
-  document.getElementById('statusText').value='🔄 Testing...';
-  try{
-    const r=await fetch(url.replace(/\/$/,'')+'/health',{signal:AbortSignal.timeout(5000)});
-    if(r.ok){document.getElementById('statusText').value='✅ Connected!';}
-    else throw new Error('HTTP '+r.status);
-  }catch(e){document.getElementById('statusText').value='❌ Failed: '+e.message;}
-}
 async function checkHealth(){
-  if(!state.backend)return;
-  const dot=document.getElementById('statusDot');
   try{
-    const r=await fetch(state.backend.replace(/\/$/,'')+'/health',{signal:AbortSignal.timeout(4000)});
-    dot.className='status-dot '+(r.ok?'ok':'err');
-  }catch{dot.className='status-dot err';}
+    await fetch(
+      state.backend+'/health',
+      {signal:AbortSignal.timeout(4000)}
+    );
+  }catch(e){
+    console.error("Backend offline");
+  }
 }
-
-// Close modal on overlay click
-document.getElementById('settingsModal').addEventListener('click',function(e){if(e.target===this)closeSettings();});
 </script>
 </body>
 </html>
