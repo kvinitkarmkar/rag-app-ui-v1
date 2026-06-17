@@ -405,6 +405,16 @@
     background:none;border:none;transition:all .15s;
   }
   .attach-btn:hover{color:var(--text2);background:var(--glass);}
+  .attach-btn.uploading{
+    color:var(--accent);
+    background:rgba(79,142,247,0.08);
+    border:1px solid rgba(79,142,247,0.2);
+    animation:pulseAttach 1.4s ease-in-out infinite;
+  }
+  @keyframes pulseAttach{
+    0%,100%{opacity:1;}
+    50%{opacity:0.55;}
+  }
   .char-count{font-size:10px;color:var(--text3);margin-left:auto;}
 
   /* ── SETTINGS MODAL ── */
@@ -466,7 +476,7 @@
     .sidebar.open{transform:translateX(0);}
     .sidebar-overlay{
       display:none;position:fixed;inset:0;z-index:49;
-      background:rgba(0,0,0,0.6);backdrop-filter:blur(2px);
+      background:transparent;
     }
     .sidebar-overlay.open{display:block;}
     .menu-btn{display:flex;}
@@ -567,7 +577,25 @@
 
     <div class="chat-area" id="chatArea">
       <div class="welcome" id="welcomeScreen">
-        <div class="welcome-glow">💎</div>
+        <div class="welcome-glow">
+          <svg width="36" height="36" viewBox="0 0 48 48" fill="none">
+            <defs>
+              <linearGradient id="kyaniteGradA" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#8fa8ff"/>
+                <stop offset="100%" stop-color="#9b7bff"/>
+              </linearGradient>
+              <linearGradient id="kyaniteGradB" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#4f8ef7"/>
+                <stop offset="100%" stop-color="#7c5cfc"/>
+              </linearGradient>
+            </defs>
+            <path d="M24 2L40 16L33 46L15 46L8 16L24 2Z" fill="url(#kyaniteGradB)" opacity="0.22"/>
+            <path d="M24 2L40 16L24 24L8 16L24 2Z" fill="url(#kyaniteGradA)"/>
+            <path d="M8 16L24 24L15 46L8 16Z" fill="url(#kyaniteGradB)" opacity="0.85"/>
+            <path d="M40 16L24 24L33 46L40 16Z" fill="url(#kyaniteGradB)" opacity="0.6"/>
+            <path d="M24 2L24 24M8 16L24 24M40 16L24 24M24 24L15 46M24 24L33 46" stroke="rgba(255,255,255,0.35)" stroke-width="0.6"/>
+          </svg>
+        </div>
         <h2>Kyanite.ai</h2>
         <p>Upload a PDF and ask anything — get structured, intelligent answers instantly.</p>
         <div class="chips">
@@ -592,7 +620,9 @@
           </button>
         </div>
         <div class="input-bottom">
-          <button class="attach-btn" onclick="document.getElementById('fileInput').click()">📎 Attach PDF</button>
+          <button class="attach-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()">
+            <span id="attachBtnLabel">📎 Attach PDF</span>
+          </button>
           <span class="char-count" id="charCount">0 / 2000</span>
         </div>
       </div>
@@ -633,7 +663,25 @@ const LS_BACKEND_KEY  = "kyanite_backend_url";
 
 const WELCOME_HTML = `
   <div class="welcome" id="welcomeScreen">
-    <div class="welcome-glow">💎</div>
+    <div class="welcome-glow">
+      <svg width="36" height="36" viewBox="0 0 48 48" fill="none">
+        <defs>
+          <linearGradient id="kyaniteGradA2" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#8fa8ff"/>
+            <stop offset="100%" stop-color="#9b7bff"/>
+          </linearGradient>
+          <linearGradient id="kyaniteGradB2" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#4f8ef7"/>
+            <stop offset="100%" stop-color="#7c5cfc"/>
+          </linearGradient>
+        </defs>
+        <path d="M24 2L40 16L33 46L15 46L8 16L24 2Z" fill="url(#kyaniteGradB2)" opacity="0.22"/>
+        <path d="M24 2L40 16L24 24L8 16L24 2Z" fill="url(#kyaniteGradA2)"/>
+        <path d="M8 16L24 24L15 46L8 16Z" fill="url(#kyaniteGradB2)" opacity="0.85"/>
+        <path d="M40 16L24 24L33 46L40 16Z" fill="url(#kyaniteGradB2)" opacity="0.6"/>
+        <path d="M24 2L24 24M8 16L24 24M40 16L24 24M24 24L15 46M24 24L33 46" stroke="rgba(255,255,255,0.35)" stroke-width="0.6"/>
+      </svg>
+    </div>
     <h2>Kyanite.ai</h2>
     <p>Upload a PDF and ask anything — get structured, intelligent answers instantly.</p>
     <div class="chips">
@@ -863,6 +911,11 @@ function createSessionFromFile(file){
 }
 
 async function doUpload(session, file){
+  const label = document.getElementById('attachBtnLabel');
+  const btn = document.getElementById('attachBtn');
+  btn.classList.add('uploading');
+  label.textContent = `⏳ Uploading 0%`;
+
   setProgress(15);
   const controller = new AbortController();
   const timeoutId = setTimeout(()=>controller.abort(), 120000); // 2 min for large PDFs
@@ -872,10 +925,13 @@ async function doUpload(session, file){
     fd.append('file', file);
 
     setProgress(40);
+    label.textContent = `⏳ Uploading ${file.name.length > 18 ? file.name.slice(0,15)+'…' : file.name}`;
+
     const res = await fetch(state.backend.replace(/\/$/,'') + '/upload', {
       method: 'POST', body: fd, signal: controller.signal
     });
     setProgress(80);
+    label.textContent = `⏳ Indexing...`;
 
     if(!res.ok){
       const detail = await safeErrorDetail(res, 'Upload failed (' + res.status + ').');
@@ -888,12 +944,14 @@ async function doUpload(session, file){
     session.pdf.pages = data.pages;
     session.pdf.chunks = data.chunks;
     setProgress(100);
+    label.textContent = `✅ ${data.pages} pages indexed`;
     showToast(`"${file.name}" is ready — ${data.pages} pages indexed.`, 'success');
   }catch(err){
     session.status = 'error';
     const message = err.name === 'AbortError'
       ? 'Upload timed out. Try a smaller file or check your connection.'
       : (err.message || 'Could not reach the backend. Check your connection or backend URL in Settings.');
+    label.textContent = `⚠️ Upload failed`;
     showToast(`"${file.name}": ${message}`, 'error');
   }finally{
     clearTimeout(timeoutId);
@@ -901,6 +959,8 @@ async function doUpload(session, file){
     if(state.activeSessionId === session.id) updateTopbar(session);
     persistState();
     setTimeout(()=>setProgress(0), 400);
+    btn.classList.remove('uploading');
+    setTimeout(()=>{ label.textContent = '📎 Attach PDF'; }, 3000);
   }
 }
 
